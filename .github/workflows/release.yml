@@ -79,14 +79,18 @@ jobs:
           if [ -z "$AMO_JWT_ISSUER" ] || [ -z "$AMO_JWT_SECRET" ]; then
             echo "::notice::AMO_JWT_ISSUER / AMO_JWT_SECRET are not configured: skipping the Mozilla signing (forks, or secrets not set)."
             echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "finalize=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' | grep -q '\.xpi$'; then
-            echo "::notice::The release already has a signed .xpi: nothing to do (Mozilla signs a version number only once)."
+            # Mozilla firma una versione una sola volta: niente da firmare, ma la pulizia va rifatta (un run precedente puo' essere morto dopo l'upload)
+            echo "::notice::The release already has a signed .xpi: not signing again, only making sure the release is in its final state."
             echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "finalize=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "finalize=false" >> "$GITHUB_OUTPUT"
 
       - name: Take the released Firefox build
         if: steps.cfg.outputs.run == 'true'
@@ -128,6 +132,7 @@ jobs:
           done
 
       - name: Attach the signed file to the release
+        id: attach
         if: steps.cfg.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -135,3 +140,30 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           cp "$(find signed -name '*.xpi')" "twizen-adblock-firefox-v${version}.xpi"
           gh release upload "${GITHUB_REF_NAME}" "twizen-adblock-firefox-v${version}.xpi"
+
+      # Con il .xpi firmato la Release offre un solo file per browser: via lo zip Firefox non firmato, note riscritte.
+      # Ordine: prima lo zip, poi le note (se muore in mezzo le note originali restano vere: parlano dello zip solo "se non c'e' un .xpi").
+      # Idempotente: gira anche quando il .xpi c'era gia' (vedi cfg) e non fa nulla se e' tutto gia' a posto.
+      - name: Leave one file per browser on the release
+        if: steps.cfg.outputs.finalize == 'true' || steps.attach.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          assets="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          # lo zip si cancella solo se il .xpi atteso e' davvero sulla Release
+          if ! printf '%s\n' "$assets" | grep -qx "twizen-adblock-firefox-v${version}.xpi"; then
+            echo "::error::twizen-adblock-firefox-v${version}.xpi is not on the release: leaving the Firefox zip in place."
+            exit 1
+          fi
+          if printf '%s\n' "$assets" | grep -qx "twizen-adblock-firefox-v${version}.zip"; then
+            gh release delete-asset "${GITHUB_REF_NAME}" "twizen-adblock-firefox-v${version}.zip" --yes
+          fi
+          cat > notes.md <<'NOTES'
+          Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". There are no automatic updates.
+
+          Firefox: the `.xpi` is signed by Mozilla. Open it in Firefox, or drag it onto a Firefox window, and confirm the installation. Updates are manual: install the newer file.
+
+          See the README for details and known limits.
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file notes.md
