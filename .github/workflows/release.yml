@@ -43,9 +43,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat > notes.md <<'NOTES'
-          Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". There are no automatic updates.
+          Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". Updates are manual: when a newer release exists the extension shows a badge on its toolbar icon, and clicking the icon opens the release page.
 
-          Firefox: if a `.xpi` file is listed among the assets, it was signed by Mozilla (a separate job adds it after this release is published): open it in Firefox, or drag it onto a Firefox window, to install it. If there is no `.xpi`, use the Firefox zip, which is unsigned and can only be loaded as a temporary add-on (`about:debugging#/runtime/this-firefox`, "Load Temporary Add-on"); it is removed when Firefox restarts.
+          Firefox: if a `.xpi` file is listed among the assets, it was signed by Mozilla (a separate job adds it after this release is published): open it in Firefox, or drag it onto a Firefox window, to install it. A signed add-on then updates itself. If there is no `.xpi`, use the Firefox zip, which is unsigned and can only be loaded as a temporary add-on (`about:debugging#/runtime/this-firefox`, "Load Temporary Add-on"); it is removed when Firefox restarts and never updates.
 
           See the README for details and known limits.
           NOTES
@@ -141,6 +141,35 @@ jobs:
           cp "$(find signed -name '*.xpi')" "twizen-adblock-firefox-v${version}.xpi"
           gh release upload "${GITHUB_REF_NAME}" "twizen-adblock-firefox-v${version}.xpi"
 
+      # Manifest degli aggiornamenti di Firefox (update_url del manifest). Si ricalcola dal .xpi che e' davvero sulla Release, quindi
+      # l'hash e' quello dei byte che Firefox scarichera'. Gira anche in finalize: se un run precedente e' morto prima dell'upload, lo ripara.
+      # Va PRIMA della pulizia: se la pulizia fallisce, gli aggiornamenti funzionano comunque. Se manca (firma fallita), "latest" da' 404:
+      # Firefox lo registra e riprova al controllo successivo, nessun effetto per l'utente.
+      - name: Publish the Firefox update manifest
+        if: steps.cfg.outputs.finalize == 'true' || steps.attach.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          xpi="twizen-adblock-firefox-v${version}.xpi"
+          if ! gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' | grep -qx "$xpi"; then
+            echo "::error::${xpi} is not on the release: not publishing the update manifest."
+            exit 1
+          fi
+          gh release download "${GITHUB_REF_NAME}" --pattern "$xpi" --dir published
+          hash="$(sha256sum "published/${xpi}" | cut -d' ' -f1)"
+          mkdir -p manifest
+          jq -n --arg id "twizen-adblock@chardido.github.io" --arg v "$version" \
+            --arg link "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${xpi}" \
+            --arg hash "sha256:${hash}" \
+            '{addons: {($id): {updates: [{version: $v, update_link: $link, update_hash: $hash}]}}}' > manifest/updates.json
+          # se la Release ha gia' lo stesso file non si tocca nulla (--clobber cancella prima di caricare)
+          if gh release download "${GITHUB_REF_NAME}" --pattern updates.json --dir existing 2>/dev/null && cmp -s existing/updates.json manifest/updates.json; then
+            echo "updates.json is already up to date."
+            exit 0
+          fi
+          gh release upload "${GITHUB_REF_NAME}" manifest/updates.json --clobber
+
       # Con il .xpi firmato la Release offre un solo file per browser: via lo zip Firefox non firmato, note riscritte.
       # Ordine: prima lo zip, poi le note (se muore in mezzo le note originali restano vere: parlano dello zip solo "se non c'e' un .xpi").
       # Idempotente: gira anche quando il .xpi c'era gia' (vedi cfg) e non fa nulla se e' tutto gia' a posto.
@@ -160,9 +189,9 @@ jobs:
             gh release delete-asset "${GITHUB_REF_NAME}" "twizen-adblock-firefox-v${version}.zip" --yes
           fi
           cat > notes.md <<'NOTES'
-          Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". There are no automatic updates.
+          Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". Updates are manual: when a newer release exists the extension shows a badge on its toolbar icon, and clicking the icon opens the release page.
 
-          Firefox: the `.xpi` is signed by Mozilla. Open it in Firefox, or drag it onto a Firefox window, and confirm the installation. Updates are manual: install the newer file.
+          Firefox: the `.xpi` is signed by Mozilla. Open it in Firefox, or drag it onto a Firefox window, and confirm the installation. It then updates itself (Firefox checks about once a day).
 
           See the README for details and known limits.
           NOTES

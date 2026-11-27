@@ -9,7 +9,7 @@ Keeps twitch.tv on the live stream during ad breaks. A small browser extension f
 
 </div>
 
-It does one thing: when twitch.tv inserts an ad break, the player is handed the same live stream without the break. There is no popup, no options page and no interface.
+It does one thing: when twitch.tv inserts an ad break, the player is handed the same live stream without the break. There is no popup, no options page and no page interface. On Chrome the toolbar icon only tells you when a newer release exists (see [Updates](#updates)).
 
 ## Install
 
@@ -20,7 +20,7 @@ Download the file for your browser from the [latest release](https://github.com/
 | Version | 111 or newer | 128 or newer |
 | File to download | `twizen-adblock-chrome-v<version>.zip` | `twizen-adblock-firefox-v<version>.xpi` |
 | Stays installed after a restart | Yes, until you remove it | Yes, until you remove it |
-| Updates | Manual: replace the folder with a newer release | Manual: install the newer file |
+| Updates | Manual, with a badge on the toolbar icon when a newer release exists | Automatic (from 0.1.4) |
 
 ### Chrome
 
@@ -29,7 +29,7 @@ Download the file for your browser from the [latest release](https://github.com/
 3. Click **Load unpacked** and select the unzipped folder.
 4. Reload any open twitch.tv tab.
 
-To update, download the new release, replace the contents of the folder, then press the reload button on the extension's card in `chrome://extensions`.
+To update, see [Updates](#updates).
 
 ### Firefox
 
@@ -37,9 +37,21 @@ To update, download the new release, replace the contents of the folder, then pr
 2. Open it in Firefox (or drag it onto a Firefox window) and confirm the installation prompt.
 3. Reload any open twitch.tv tab.
 
-The `.xpi` is signed by Mozilla (unlisted, self-distributed) and installs as a regular add-on that stays installed across restarts. To update, install the newer file.
+The `.xpi` is signed by Mozilla (unlisted, self-distributed) and installs as a regular add-on that stays installed across restarts. It updates itself, see [Updates](#updates).
 
-If a release has no `.xpi` (for example because signing did not complete), it carries the unsigned `twizen-adblock-firefox-v<version>.zip` instead. Do not unzip it: open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and select the zip. It is removed when Firefox restarts.
+If a release has no `.xpi` (for example because signing did not complete), it carries the unsigned `twizen-adblock-firefox-v<version>.zip` instead. Do not unzip it: open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and select the zip. It is removed when Firefox restarts and does not update itself.
+
+## Updates
+
+**Firefox.** From 0.1.4 on, the signed `.xpi` updates itself: its manifest points to an update file attached to each release, and Firefox checks it about once a day and installs a newer signed version without asking you to do anything. If you have 0.1.3 or earlier, install 0.1.4 by hand once; those versions do not look for updates. If a release has no signed `.xpi` yet, Firefox simply finds nothing new and tries again later. The unsigned zip never updates.
+
+**Chrome.** An unpacked extension cannot update itself, so the update stays manual. About once a day the extension asks GitHub whether a newer release exists. If one does, a small `NEW` badge appears on the toolbar icon and the icon's tooltip names the installed and the available version. Clicking the icon always opens the [latest release page](https://github.com/chardido/twizen-adblock/releases/latest). To update, download the new zip, replace the contents of your extension folder with it, then press the reload button on the extension's card in `chrome://extensions`. The badge goes away on its own once the running version is the latest one. If the check fails (offline, GitHub rate limit, unexpected answer) nothing is shown and it is tried again at the next scheduled check.
+
+## Privacy
+
+- Chrome: the extension makes one request about every 24 hours to `https://api.github.com/repos/chardido/twizen-adblock/releases/latest`. It is sent without cookies and with only the headers Chrome adds to any request (such as the user agent and language), no identifier of its own, and nothing about you, your browsing or your Twitch use is included. Like any request it reveals your IP address to GitHub, and Chrome adds the extension's origin (`chrome-extension://<id>`; for an unpacked extension the id is derived from the folder path). The answer is read for the version number only; the extension stores the time of the last check and the latest version it saw, in its own local storage. It asks for the `alarms` permission (the daily schedule) and the `storage` permission (those two values) and for no site access beyond twitch.tv.
+- Firefox: the extension itself makes no requests. Firefox, as part of its normal add-on update check, fetches `https://github.com/chardido/twizen-adblock/releases/latest/download/updates.json` about once a day, and downloads the new `.xpi` from GitHub when there is one. Both are requests to GitHub from your browser, like any download, and reveal your IP address to it.
+- Nothing is sent to any other server. The extension has no analytics and no account.
 
 ## Is it working
 
