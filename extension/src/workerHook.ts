@@ -1,7 +1,9 @@
+import type { AdIO, CleanSource } from '../../src/net/adSource';
 import { AdController } from '../../src/player/adController';
 import { createFetchHook } from './hook';
 import { createExtIO, extSources } from './io';
 import { PlaylistRouter, type Processor } from './router';
+import { createSession } from './session';
 import { stripAnnouncedAds } from './scrub';
 
 /**
@@ -9,18 +11,53 @@ import { stripAnnouncedAds } from './scrub';
  * master e media playlist passano dal controller delle pause pubblicitarie, il resto no.
  */
 // piu' worker possono coesistere (il player ne crea due): un tag corto distingue i log
-const LOG_PREFIX = `[twizen-adblock] [${Math.random().toString(36).slice(2, 5)}] `;
+const TAG = Math.random().toString(36).slice(2, 5);
+const LOG_PREFIX = `[twizen-adblock] [${TAG}] `;
 const log = (m: string): void => console.log(LOG_PREFIX + m);
 
-/** Il controller lascia passare il testo finche' non ci sono segmenti pubblicitari: li' si tolgono i date range annunciati (scrub.ts). */
-function withScrub(c: AdController): Processor {
+/**
+ * Un controller con il suo sink silenzioso: i secondi si accumulano e si scrive UNA riga per break (al ritorno a 'idle',
+ * o alla distruzione se la sessione viene scartata a meta' break). Il testo passa da scrub.ts finche' non ci sono
+ * segmenti pubblicitari: li' si tolgono i date range annunciati.
+ */
+function makeProcessor(login: string, io: AdIO, sources: CleanSource[], describe: () => string): Processor {
+  let alt = 0;
+  let wait = 0;
+  const flush = (why: string): void => {
+    if (alt || wait) log(`pausa pubblicitaria${why}: live da sorgente pulita ${alt} s${wait ? `, in attesa senza sorgente ${wait} s` : ''}`);
+    alt = 0;
+    wait = 0;
+  };
+  const sink = {
+    addBreak() {},
+    addAlt(sec: number) {
+      alt += sec;
+    },
+    addPlaceholder(sec: number) {
+      wait += sec;
+    },
+    addFailure() {
+      log('mitigazione non riuscita');
+    },
+  };
+  const make = (): AdController => {
+    const c = new AdController({ login, enabled: true, io, sources, sink, log });
+    c.on((s) => {
+      if (s.mode === 'idle') flush('');
+    });
+    return c;
+  };
   const f = (text: string, ctx: { kind: 'master' | 'media' }) => (out: string): string => (ctx.kind === 'media' && out === text ? stripAnnouncedAds(text) : out);
+  const session = createSession({ make, log, describe, onStopped: () => flush(' (sessione senza playlist)') });
   return {
     process(text, ctx) {
-      const r = c.process(text, ctx);
+      const r = session.process(text, ctx);
       return typeof r === 'string' ? f(text, ctx)(r) : r.then(f(text, ctx));
     },
-    destroy: () => c.destroy(),
+    destroy() {
+      session.destroy();
+      flush(' (sessione scartata)');
+    },
   };
 }
 
@@ -31,20 +68,10 @@ if (typeof g.fetch === 'function') {
   const rawFetch = g.fetch.bind(self);
   const io = createExtIO(rawFetch, 8000);
   const sources = extSources(rawFetch, log);
-  const sink = {
-    addBreak() {},
-    addAlt(sec: number) {
-      log(`live da sorgente pulita per ${sec} s`);
-    },
-    addPlaceholder(sec: number) {
-      log(`nessuna sorgente pulita: attesa per ${sec} s`);
-    },
-    addFailure() {
-      log('mitigazione non riuscita');
-    },
-  };
-  const router = new PlaylistRouter((login) => withScrub(new AdController({ login, enabled: true, io, sources, sink, log })));
+  const router: PlaylistRouter = new PlaylistRouter((login) => makeProcessor(login, io, sources, () => router.describe()));
   const hooked = createFetchHook({ fetch: rawFetch, router, log });
+  // l'etichetta sulla funzione (non sul global) permette all'osservatore del check di collegare le sue righe a quelle del gancio
+  (hooked as unknown as { twizenTag: string }).twizenTag = TAG;
   g.fetch = hooked;
   log('gancio attivo nel worker');
 }

@@ -96,6 +96,50 @@ describe('createFetchHook', () => {
   });
 });
 
+describe('sessioni parallele dello stesso canale', () => {
+  it('una nuova master non toglie il controller alla sessione ancora in riproduzione: un annuncio sulla vecchia viene gestito, non lasciato passare', async () => {
+    const MEDIA_B = 'https://euc.playlist.ttvnw.net/v1/playlist/BBB.m3u8';
+    const MASTER_B = MASTER.replace(MEDIA_URL, MEDIA_B);
+    const sink = { addBreak() {}, addAlt() {}, addPlaceholder() {}, addFailure() {} };
+    const raw = async (input: any, init?: any): Promise<Response> => {
+      const url = String(typeof input === 'string' ? input : input.url);
+      if (url === MASTER_URL) return resp(MASTER);
+      if (url.startsWith('https://usher.ttvnw.net/api/v2/') && url.includes('sessione=b')) return resp(MASTER_B);
+      if (url === MEDIA_URL) return resp(fx('preroll-start.m3u8'));
+      if (url.startsWith('https://gql.twitch.tv/')) return new Response(JSON.stringify({ data: { streamPlaybackAccessToken: { value: 'v', signature: 's' } } }));
+      if (url.startsWith('https://usher.ttvnw.net/api/channel/')) return resp(['#EXTM3U', '#EXT-X-STREAM-INF:BANDWIDTH=1427999,RESOLUTION=852x480,CODECS="a",VIDEO="480p30",FRAME-RATE=30.000', 'https://alt.test/480.m3u8'].join('\n'));
+      if (url === 'https://alt.test/480.m3u8') return resp(fx('preroll-alt-ps4-08.m3u8'));
+      void init;
+      throw new Error('inatteso ' + url);
+    };
+    const io = { fetchText: async (u: string) => (await raw(u, {})).text() };
+    const sources = CLEAN_SHAPES.map((s) => extShapeSource(s, raw, 1000, () => {}));
+    const r = new PlaylistRouter((login) => new AdController({ login, enabled: true, io, sources, sink, log: () => {} }));
+    const f = createFetchHook({ fetch: raw, router: r, log: () => {} });
+    await f(MASTER_URL); // sessione A
+    await f(MASTER_URL.replace('?', '?sessione=b&')); // sessione B, stesso canale
+    expect(r.sessions('pgl')).toBe(2);
+    const out = await f(MEDIA_URL); // un annuncio arriva sulla variante di A
+    expect(await out.text()).not.toContain('Amazon');
+  });
+});
+
+describe('diagnostica', () => {
+  it('avvisa quando il player riceve segmenti pubblicitari e quando una media playlist non ha master', async () => {
+    const ad = fx('preroll-start.m3u8');
+    const { r } = router((t) => t); // il processore lascia passare tutto, come in un fallimento della mitigazione
+    const logs: string[] = [];
+    const f = createFetchHook({ fetch: async (i) => (String(i) === MASTER_URL ? resp(MASTER) : resp(ad)), router: r, log: (m) => logs.push(m) });
+    await f(MASTER_URL);
+    await f(MEDIA_URL);
+    await f(MEDIA_URL);
+    expect(logs.filter((m) => m.startsWith('ATTENZIONE'))).toHaveLength(1);
+    await f('https://euc.playlist.ttvnw.net/v1/playlist/SCONOSCIUTA.m3u8');
+    await f('https://euc.playlist.ttvnw.net/v1/playlist/SCONOSCIUTA.m3u8');
+    expect(logs.filter((m) => m.includes('non associata'))).toHaveLength(1);
+  });
+});
+
 describe('integrazione con AdController (senza rete)', () => {
   it('pre-roll: il player riceve il live della sorgente pulita e le richieste del controller NON passano dal gancio', async () => {
     const seen: string[] = [];

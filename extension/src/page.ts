@@ -40,6 +40,8 @@ if (typeof W.Worker === 'function' && typeof Blob === 'function') {
           const opts = args[1] as WorkerOptions | undefined;
           const isBlob = abs.indexOf('blob:') === 0;
           const src = isBlob && !(opts && opts.type === 'module') ? readBlob(abs) : null;
+          if (isBlob && src === null) console.log('[twizen-adblock] blob non leggibile, worker non agganciato: ' + abs.slice(0, 60));
+          else if (!isPlayerWorker(abs, opts, src) && /ivs|wasm/i.test(src === null ? abs : src.slice(0, 400))) console.log('[twizen-adblock] worker sospetto NON agganciato: ' + abs.slice(0, 60));
           if (isPlayerWorker(abs, opts, src)) {
             const body = isBlob ? (src as string) : 'importScripts(' + JSON.stringify(abs) + ');';
             const blobUrl = URL.createObjectURL(new Blob([__WORKER_HOOK_SOURCE__ + '\n' + body], { type: 'text/javascript' }));

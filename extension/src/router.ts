@@ -11,35 +11,50 @@ interface Slot {
   login: string;
   proc: Processor;
   keys: string[];
+  lastUse: number;
 }
 
+/** Un giocatore in pausa smette di interrogare la playlist e puo' riprendere la stessa URL molto dopo: si scarta solo dopo un'inattivita' lunga. */
+const IDLE_MS = 30 * 60 * 1000;
+
 /**
- * Instrada le playlist al controller che le possiede. Un worker puo' servire piu' canali nel tempo (navigazione):
- * si tiene un piccolo insieme di controller, il meno recente viene distrutto. Una nuova master dello stesso canale
- * e' una nuova sessione di riproduzione (numerazione nuova): sostituisce il controller.
+ * Instrada le playlist al controller che le possiede. L'unita' e' la SESSIONE (una risposta master con le sue
+ * varianti), non il canale: una nuova master dello stesso canale non toglie la proprieta' alle playlist di
+ * una sessione ancora in riproduzione (resterebbero senza controller e un annuncio passerebbe indisturbato).
+ * La memoria e' limitata per numero (si scarta la meno usata di recente) e per inattivita' lunga; la pulizia
+ * avviene durante le chiamate, senza timer.
  */
 export class PlaylistRouter {
   private slots: Slot[] = [];
   private byKey = new Map<string, Slot>();
 
-  constructor(private make: (login: string) => Processor, private max = 3) {}
+  constructor(
+    private make: (login: string) => Processor,
+    private max = 8,
+    private now: () => number = () => Date.now(),
+    private idleMs = IDLE_MS,
+  ) {}
 
-  /** Il testo che il player deve vedere per la master. */
+  /** Il testo che il player deve vedere per la master: crea una sessione nuova. */
   master(login: string, url: string, text: string): string | Promise<string> {
-    const old = this.slots.find((s) => s.login === login);
-    if (old) this.drop(old);
-    const slot: Slot = { login, proc: this.make(login), keys: [] };
+    this.sweep();
+    const slot: Slot = { login, proc: this.make(login), keys: [], lastUse: this.now() };
     for (const v of parseMaster(text)) {
       const k = urlKey(v.url);
       slot.keys.push(k);
-      this.byKey.set(k, slot);
+      this.byKey.set(k, slot); // la sessione piu' recente possiede una chiave condivisa
     }
     this.slots.push(slot);
     while (this.slots.length > this.max) this.drop(this.slots[0]);
     return slot.proc.process(text, { kind: 'master', url });
   }
 
-  /** null se la playlist non appartiene a nessun controller: va lasciata com'e', senza nemmeno leggerla. */
+  /** Quante sessioni vive ci sono per il canale. */
+  sessions(login: string): number {
+    return this.slots.filter((s) => s.login === login).length;
+  }
+
+  /** false se la playlist non appartiene a nessun controller: va lasciata com'e', senza nemmeno leggerla. */
   owns(key: string): boolean {
     return this.byKey.has(key);
   }
@@ -47,6 +62,8 @@ export class PlaylistRouter {
   media(key: string, url: string, text: string): string | Promise<string> {
     const slot = this.byKey.get(key);
     if (!slot) return text;
+    slot.lastUse = this.now();
+    this.sweep();
     // il piu' recente per ultimo
     const i = this.slots.indexOf(slot);
     if (i >= 0 && i < this.slots.length - 1) {
@@ -56,8 +73,19 @@ export class PlaylistRouter {
     return slot.proc.process(text, { kind: 'media', url });
   }
 
+  /** Stato sintetico per i log: per ogni sessione il canale e da quanto tempo non viene interrogata. */
+  describe(): string {
+    const t = this.now();
+    return 'sessioni: ' + this.slots.map((s) => `${s.login} (ultima playlist ${Math.round((t - s.lastUse) / 1000)} s fa)`).join(', ');
+  }
+
   size(): number {
     return this.slots.length;
+  }
+
+  private sweep(): void {
+    const t = this.now();
+    for (const s of this.slots.slice()) if (t - s.lastUse > this.idleMs) this.drop(s);
   }
 
   private drop(slot: Slot): void {

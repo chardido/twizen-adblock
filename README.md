@@ -54,7 +54,7 @@ The messages are in Italian.
 ## Known limits
 
 - Pre-rolls were verified on several real channels in Chrome. Mid-rolls were seen on very few real samples; during a mid-roll the stream drops to 360p for the length of the break, because only that request shape stays ad-free.
-- The Firefox build has not been tested.
+- The Firefox build was tried on Firefox 161 (macOS) loaded as a temporary add-on: pre-rolls were handled in several sessions of up to 10 minutes. No mid-roll was seen there.
 - Embedded players on other sites have not been tested.
 - Twitch can change playlist formats or request rules at any time and break this without notice.
 - It conflicts with other scripts or extensions that also wrap `Worker` on twitch.tv.
