@@ -1,0 +1,5 @@
+node_modules
+dist
+extension/dist
+# segna la cartella come generata da export-extension (contiene il commit sorgente, non va pubblicato)
+.twizen-export

@@ -1,0 +1,20 @@
+{
+  "name": "twizen-adblock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser extension that keeps twitch.tv on the live stream during ad breaks",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc --noEmit && node scripts/build-extension.mjs",
+    "test": "vitest run",
+    "check": "node scripts/ext-live-check.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "playwright-core": "^1.65.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.4.0",
+    "vitest": "^5.1.2"
+  }
+}
