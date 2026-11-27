@@ -19,7 +19,7 @@ Download the file for your browser from the [latest release](https://github.com/
 |---|---|---|
 | Version | 111 or newer | 128 or newer |
 | File to download | `twizen-adblock-chrome-v<version>.zip` | `twizen-adblock-firefox-v<version>.xpi` |
-| Stays installed after a restart | Yes, until you remove it | It installs as a regular add-on, signed by Mozilla |
+| Stays installed after a restart | Yes, until you remove it | Yes, until you remove it |
 | Updates | Manual: replace the folder with a newer release | Manual: install the newer file |
 
 ### Chrome
@@ -37,7 +37,7 @@ To update, download the new release, replace the contents of the folder, then pr
 2. Open it in Firefox (or drag it onto a Firefox window) and confirm the installation prompt.
 3. Reload any open twitch.tv tab.
 
-The `.xpi` is signed by Mozilla (unlisted, self-distributed) and installs as a regular add-on. To update, install the newer file. Releases 0.1.0 and 0.1.1 have no `.xpi`.
+The `.xpi` is signed by Mozilla (unlisted, self-distributed) and installs as a regular add-on that stays installed across restarts. To update, install the newer file.
 
 If a release has no `.xpi` (for example because signing did not complete), it carries the unsigned `twizen-adblock-firefox-v<version>.zip` instead. Do not unzip it: open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and select the zip. It is removed when Firefox restarts.
 
