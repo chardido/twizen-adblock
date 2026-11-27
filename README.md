@@ -4,6 +4,14 @@ A small browser extension for twitch.tv (Chrome and Firefox, Manifest V3). Durin
 
 It does nothing else: no popup, no options, no UI, no filtering of other content.
 
+## Install from a release
+
+Download the zip for your browser from the Releases page of this repository.
+
+**Chrome (111 or newer):** unzip it and keep the folder (Chrome reads the extension from it). Open `chrome://extensions`, enable Developer mode, choose "Load unpacked" and select the folder. Reload any open twitch.tv tab. There are no automatic updates: to update, download the new release and replace the folder.
+
+**Firefox (128 or newer):** open `about:debugging#/runtime/this-firefox`, choose "Load Temporary Add-on" and select the downloaded zip. The build is unsigned, so Firefox only accepts it as a temporary add-on, which is removed when Firefox restarts and has to be loaded again. Allow access to twitch.tv in the add-on's permissions and reload the tab.
+
 ## Install from source
 
 Requires Node.js and npm.
