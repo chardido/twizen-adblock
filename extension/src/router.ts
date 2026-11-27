@@ -8,6 +8,7 @@ export interface Processor {
 }
 
 interface Slot {
+  id: number;
   login: string;
   proc: Processor;
   keys: string[];
@@ -28,8 +29,12 @@ export class PlaylistRouter {
   private slots: Slot[] = [];
   private byKey = new Map<string, Slot>();
 
+  private nextId = 1;
+  /** Id (1, 2, ...) della sessione creata dall'ultima master. */
+  lastId = 0;
+
   constructor(
-    private make: (login: string) => Processor,
+    private make: (login: string, id: number) => Processor,
     private max = 8,
     private now: () => number = () => Date.now(),
     private idleMs = IDLE_MS,
@@ -38,7 +43,9 @@ export class PlaylistRouter {
   /** Il testo che il player deve vedere per la master: crea una sessione nuova. */
   master(login: string, url: string, text: string): string | Promise<string> {
     this.sweep();
-    const slot: Slot = { login, proc: this.make(login), keys: [], lastUse: this.now() };
+    const id = this.nextId++;
+    this.lastId = id;
+    const slot: Slot = { id, login, proc: this.make(login, id), keys: [], lastUse: this.now() };
     for (const v of parseMaster(text)) {
       const k = urlKey(v.url);
       slot.keys.push(k);
@@ -47,6 +54,12 @@ export class PlaylistRouter {
     this.slots.push(slot);
     while (this.slots.length > this.max) this.drop(this.slots[0]);
     return slot.proc.process(text, { kind: 'master', url });
+  }
+
+  /** Id della sessione che possiede la playlist, 0 se nessuna. */
+  idOf(key: string): number {
+    const s = this.byKey.get(key);
+    return s ? s.id : 0;
   }
 
   /** Quante sessioni vive ci sono per il canale. */
@@ -76,7 +89,7 @@ export class PlaylistRouter {
   /** Stato sintetico per i log: per ogni sessione il canale e da quanto tempo non viene interrogata. */
   describe(): string {
     const t = this.now();
-    return 'sessioni: ' + this.slots.map((s) => `${s.login} (ultima playlist ${Math.round((t - s.lastUse) / 1000)} s fa)`).join(', ');
+    return 'sessioni: ' + this.slots.map((s) => `s${s.id} ${s.login} (ultima playlist ${Math.round((t - s.lastUse) / 1000)} s fa)`).join(', ');
   }
 
   size(): number {

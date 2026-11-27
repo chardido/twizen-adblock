@@ -133,7 +133,7 @@ describe('diagnostica', () => {
     await f(MASTER_URL);
     await f(MEDIA_URL);
     await f(MEDIA_URL);
-    expect(logs.filter((m) => m.startsWith('ATTENZIONE'))).toHaveLength(1);
+    expect(logs.filter((m) => m.includes('ATTENZIONE'))).toHaveLength(1);
     await f('https://euc.playlist.ttvnw.net/v1/playlist/SCONOSCIUTA.m3u8');
     await f('https://euc.playlist.ttvnw.net/v1/playlist/SCONOSCIUTA.m3u8');
     expect(logs.filter((m) => m.includes('non associata'))).toHaveLength(1);

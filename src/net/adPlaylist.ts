@@ -274,8 +274,15 @@ export class Timeline {
   private cc: { [sn: number]: number } = {};
   private known: number[] = [];
   private elide = false;
+  private lastSrc: string | undefined;
+  private switchSn: number | null = null;
 
-  constructor(private memory = 400) {}
+  /**
+   * `markSourceSwitch` (opt-in, spento di default): quando emit riceve un `src` diverso dal precedente (es. dall'alternativa
+   * alla playlist originale, di solito un'altra rendition con un altro init segment) mette una EXT-X-DISCONTINUITY sul
+   * primo segmento nuovo, come richiede HLS quando cambia la sorgente o la EXT-X-MAP.
+   */
+  constructor(private memory = 400, private opts: { markSourceSwitch?: boolean } = {}) {}
 
   /** Il prossimo contenuto reale va attaccato subito dopo l'ultimo consegnato, con una discontinuita'. */
   markGap(): void {
@@ -291,7 +298,7 @@ export class Timeline {
   }
 
   /** Produce la playlist per hls.js con i soli segmenti `use` (nell'ordine) di `p`. `base` risolve gli URI relativi. */
-  emit(p: ParsedMedia, use: Entry[], base: string): EmitResult | null {
+  emit(p: ParsedMedia, use: Entry[], base: string, src?: string): EmitResult | null {
     if (!use.length) return null;
     // Una playlist numera i segmenti in modo consecutivo: dopo un buco nel contenuto (es. una pausa gia' scartata
     // in mezzo alla finestra) si tiene solo la parte piu' recente, contigua.
@@ -312,6 +319,10 @@ export class Timeline {
       }
       this.elide = false;
     }
+    if (this.opts.markSourceSwitch && src !== undefined) {
+      if (this.lastSrc !== undefined && this.lastSrc !== src && this.lastSn !== null && this.switchSn === null) this.switchSn = this.lastSn + 1;
+      this.lastSrc = src;
+    }
     const sns: number[] = [];
     const ccs: number[] = [];
     for (let i = 0; i < use.length; i++) {
@@ -327,8 +338,10 @@ export class Timeline {
         if (i === 0) {
           if (forceDisc) incr = 1;
           else if (prevSn !== null && sn > prevSn + 1) incr = 1;
+          else if (sn === this.switchSn) incr = 1;
         } else if (sn > (prevSn as number) + 1) incr = 1;
         else if (e.discBefore && this.raw(use[i - 1], p) + 1 === this.raw(e, p)) incr = 1; // discontinuita' reale dentro il contenuto
+        else if (sn === this.switchSn) incr = 1;
         cc = prevCc + incr;
       }
       if (i > 0 && cc < ccs[i - 1]) cc = ccs[i - 1];
@@ -357,6 +370,7 @@ export class Timeline {
     }
     while (this.known.length > this.memory) delete this.cc[this.known.shift() as number];
     const lastSn = sns[sns.length - 1];
+    if (this.switchSn !== null && lastSn >= this.switchSn) this.switchSn = null;
     if (this.lastSn === null || lastSn >= this.lastSn) {
       this.lastSn = lastSn;
       this.lastCc = ccs[ccs.length - 1];

@@ -152,7 +152,7 @@ async function sample(page) {
       const txt = (document.querySelector('.video-player') || document.body).innerText || '';
       const err = /something went wrong|error #\d|content is not available|this video is unavailable|playback error|Errore/i.exec(txt);
       return {
-        t: v ? v.currentTime : null, paused: v ? v.paused : null, rs: v ? v.readyState : null, w: v ? v.videoWidth : 0, h: v ? v.videoHeight : 0,
+        t: v ? v.currentTime : null, buf: v ? Array.from({ length: v.buffered.length }, (_, i) => v.buffered.start(i).toFixed(1) + '-' + v.buffered.end(i).toFixed(1)).join(' ') : '', paused: v ? v.paused : null, rs: v ? v.readyState : null, w: v ? v.videoWidth : 0, h: v ? v.videoHeight : 0,
         ad: q(adSel), err: q(errSel), errText: err ? err[0] : null,
         adText: /ad (will )?(end|break)|commercial|Ads? (in|will)|\bAd\b.*\d+:\d+|\d+ of \d+/i.exec(txt) ? txt.split('\n').filter((l) => /\bad\b|commercial|ads/i.test(l)).slice(0, 3).join(' | ') : '',
       };
@@ -166,7 +166,7 @@ async function sample(page) {
  * estensione costruita caricata come add-on temporaneo (webExtension.install), come fa l'utente. Espone la parte di
  * API Playwright che runChannel usa (on, goto, evaluate, locator, waitForTimeout, close).
  */
-async function launchFirefox(dir) {
+async function launchFirefox(dir, ch, simState) {
   const port = 9300 + Math.floor(Math.random() * 500);
   const proc = spawn(firefoxBin, ['--profile', dir, '--no-remote', '--new-instance', `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
   let ws = null;
@@ -194,7 +194,10 @@ async function launchFirefox(dir) {
     const d = JSON.parse(m.data);
     if (d.id && pending.has(d.id)) pending.get(d.id)(d);
     else if (d.method === 'log.entryAdded') handlers.console.forEach((f) => f(String(d.params.text || '')));
-    else if (d.method === 'network.beforeRequestSent') handlers.request.forEach((f) => f(d.params.request.url));
+    else if (d.method === 'network.beforeRequestSent') {
+      handlers.request.forEach((f) => f(d.params.request.url));
+      if (d.params.isBlocked && simState) simIntercept(d.params).catch(() => {});
+    }
   };
   const send = (method, params = {}) =>
     new Promise((resolveP, reject) => {
@@ -203,8 +206,41 @@ async function launchFirefox(dir) {
       ws.send(JSON.stringify({ id: i, method, params }));
     });
   await send('session.new', { capabilities: {} });
+  // simulazione di mid-roll anche su Firefox: intercettazione BiDi (network.addIntercept/provideResponse) di master e media playlist
+  const hosts = new Set();
+  const simIntercept = async (params) => {
+    const url = params.request.url;
+    const id = params.request.request;
+    const base = url.replace(/[?#].*/, '');
+    const isMaster = /usher\.ttvnw\.net\/api\/v2\/channel\/hls\//.test(url);
+    if (!isMaster && !simState.own.has(base)) return send('network.continueRequest', { request: id });
+    const text = await (await fetch(url)).text();
+    let body = text;
+    if (isMaster) {
+      for (const l of text.split('\n')) {
+        if (!l.startsWith('https://')) continue;
+        simState.own.add(l.trim().replace(/[?#].*/, ''));
+        const h = new URL(l.trim()).hostname;
+        if (!hosts.has(h)) {
+          hosts.add(h);
+          await send('network.addIntercept', { phases: ['beforeRequestSent'], urlPatterns: [{ type: 'pattern', protocol: 'https', hostname: h }] });
+        }
+      }
+    } else body = simulate(text, simState);
+    await send('network.provideResponse', {
+      request: id,
+      statusCode: 200,
+      reasonPhrase: 'OK',
+      headers: [
+        { name: 'content-type', value: { type: 'string', value: 'application/vnd.apple.mpegurl' } },
+        { name: 'access-control-allow-origin', value: { type: 'string', value: '*' } },
+      ],
+      body: { type: 'string', value: body },
+    });
+  };
   if (!control) await send('webExtension.install', { extensionData: { type: 'path', path: extDir } });
   await send('session.subscribe', { events: ['log.entryAdded', 'network.beforeRequestSent'] });
+  if (simState) await send('network.addIntercept', { phases: ['beforeRequestSent'], urlPatterns: [{ type: 'pattern', protocol: 'https', hostname: 'usher.ttvnw.net', pathname: `/api/v2/channel/hls/${ch.toLowerCase()}.m3u8` }] });
   const context = (await send('browsingContext.getTree', {})).contexts[0].context;
   const evalStr = async (expression) => {
     const r = await send('script.evaluate', { expression, target: { context }, awaitPromise: true });
@@ -238,7 +274,8 @@ async function launchFirefox(dir) {
 
 async function runChannel(ch) {
   const dir = mkdtempSync(resolve(tmpdir(), 'twizen-ext-check-'));
-  const ff = browser === 'firefox' ? await launchFirefox(dir) : null;
+  const simState = sim ? { t0: null, start: Date.now(), own: new Set() } : null;
+  const ff = browser === 'firefox' ? await launchFirefox(dir, ch, simState) : null;
   const ctx =
     ff
       ? ff.ctx
@@ -265,8 +302,8 @@ async function runChannel(ch) {
   try {
     if (!control && !ff) await ctx.addInitScript({ path: script });
     await ctx.addInitScript({ content: INIT_VIEW });
-    if (sim) {
-      const state = { t0: null, start: Date.now(), own: new Set() };
+    if (sim && !ff) {
+      const state = simState;
       // solo le playlist della master del player (api/v2): quelle richieste dal controller (altra master, api/channel) restano pulite
       await ctx.route(/usher\.ttvnw\.net\/api\/v2\/channel\/hls\//, async (route) => {
         try {
@@ -335,8 +372,8 @@ async function runChannel(ch) {
       if (s.err.length || s.errText) {
         if (samples.filter((x) => x.err.length || x.errText).length === 1) console.log(`  ${stamp()}s ERRORE UI ${JSON.stringify(s.err)} ${s.errText}`);
       }
-      if (firstPlay !== null && samples.length > 3 && samples.slice(-3).every((x) => x.t === s.t) && samples.length % 3 === 0) console.log(`  ${stamp()}s FERMO t=${s.t && s.t.toFixed(1)} rs=${s.rs} paused=${s.paused} ad=${JSON.stringify(s.ad)}`);
-      if (samples.length % 10 === 0) console.log(`  ${stamp()}s video t=${s.t && s.t.toFixed(1)} rs=${s.rs} ${s.w}x${s.h} ad=${JSON.stringify(s.ad)} ${s.adText ? 'adText=' + s.adText : ''}`);
+      if (firstPlay !== null && samples.length > 3 && samples.slice(-3).every((x) => x.t === s.t) && samples.length % 3 === 0) console.log(`  ${stamp()}s FERMO t=${s.t && s.t.toFixed(1)} rs=${s.rs} paused=${s.paused} buffered=[${s.buf}] ad=${JSON.stringify(s.ad)}`);
+      if (samples.length % 10 === 0) console.log(`  ${stamp()}s video t=${s.t && s.t.toFixed(1)} rs=${s.rs} ${s.w}x${s.h} buf=[${s.buf}] ad=${JSON.stringify(s.ad)} ${s.adText ? 'adText=' + s.adText : ''}`);
       const viewAd = logs.some((l) => /\[twizen-view\] \[\w+\] ad/.test(l.text));
       if (adEnd !== null && el > adEnd + after) break;
       if (adStart === null && !viewAd && el > end) break;

@@ -33,4 +33,18 @@ describe('stripAnnouncedAds', () => {
     const t = ['#EXTM3U', '#EXT-X-TARGETDURATION:2', SESSION, '#EXT-X-DATERANGE:ID="source-0",CLASS="twitch-stream-source",START-DATE="2026-11-27T10:00:00.000Z",X-TV-TWITCH-STREAM-SOURCE="live"', ...live(0), ''].join('\n');
     expect(stripAnnouncedAds(t)).toBe(t);
   });
+
+  it('annuncio presente (alepre98): le righe prefetch che cadono a partire dall\'inizio della pausa vengono trattenute, le altre no', () => {
+    // ultimo segmento 10:00:02 + 2 s = 10:00:04: la prima riga prefetch parte alle 10:00:04, la seconda alle 10:00:06
+    const t = ['#EXTM3U', '#EXT-X-TARGETDURATION:2', SESSION, AD.replace('10:00:30.000Z', '10:00:05.000Z'), ...live(0), ...live(1), '#EXT-X-TWITCH-PREFETCH:https://seg.test/p1', '#EXT-X-TWITCH-PREFETCH:https://seg.test/p2', ''].join('\n');
+    const out = stripAnnouncedAds(t);
+    expect(out).toContain('https://seg.test/p1');
+    expect(out).not.toContain('https://seg.test/p2');
+    expect(out).not.toContain('stitched-ad');
+  });
+
+  it('annuncio lontano: tutte le righe prefetch restano', () => {
+    const t = ['#EXTM3U', '#EXT-X-TARGETDURATION:2', SESSION, AD, ...live(0), '#EXT-X-TWITCH-PREFETCH:https://seg.test/p1', ''].join('\n');
+    expect(stripAnnouncedAds(t)).toContain('https://seg.test/p1');
+  });
 });

@@ -4,6 +4,7 @@ import { createFetchHook } from './hook';
 import { createExtIO, extSources } from './io';
 import { PlaylistRouter, type Processor } from './router';
 import { createSession } from './session';
+import { PrefetchGuard } from './prefetch';
 import { stripAnnouncedAds } from './scrub';
 
 /**
@@ -20,11 +21,13 @@ const log = (m: string): void => console.log(LOG_PREFIX + m);
  * o alla distruzione se la sessione viene scartata a meta' break). Il testo passa da scrub.ts finche' non ci sono
  * segmenti pubblicitari: li' si tolgono i date range annunciati.
  */
-function makeProcessor(login: string, io: AdIO, sources: CleanSource[], describe: () => string): Processor {
+function makeProcessor(login: string, id: number, io: AdIO, mkSources: (log: (m: string) => void) => CleanSource[], describe: () => string): Processor {
+  const slog = (m: string): void => log(`s${id} ${m}`);
+  const sources = mkSources(slog);
   let alt = 0;
   let wait = 0;
   const flush = (why: string): void => {
-    if (alt || wait) log(`pausa pubblicitaria${why}: live da sorgente pulita ${alt} s${wait ? `, in attesa senza sorgente ${wait} s` : ''}`);
+    if (alt || wait) slog(`pausa pubblicitaria${why}: live da sorgente pulita ${alt} s${wait ? `, in attesa senza sorgente ${wait} s` : ''}`);
     alt = 0;
     wait = 0;
   };
@@ -37,18 +40,31 @@ function makeProcessor(login: string, io: AdIO, sources: CleanSource[], describe
       wait += sec;
     },
     addFailure() {
-      log('mitigazione non riuscita');
+      slog('mitigazione non riuscita');
     },
   };
   const make = (): AdController => {
-    const c = new AdController({ login, enabled: true, io, sources, sink, log });
+    const c = new AdController({ login, enabled: true, io, sources, sink, log: slog, markSourceSwitch: true });
     c.on((s) => {
       if (s.mode === 'idle') flush('');
     });
     return c;
   };
-  const f = (text: string, ctx: { kind: 'master' | 'media' }) => (out: string): string => (ctx.kind === 'media' && out === text ? stripAnnouncedAds(text) : out);
-  const session = createSession({ make, log, describe, onStopped: () => flush(' (sessione senza playlist)') });
+  const guard = new PrefetchGuard();
+  let withheld = 0;
+  const f = (text: string, ctx: { kind: 'master' | 'media'; url: string }) => (out: string): string => {
+    if (ctx.kind !== 'media' || out !== text) return out;
+    const scrubbed = stripAnnouncedAds(text);
+    const res = guard.filter(ctx.url.replace(/[?#].*/, ''), scrubbed);
+    const dropped = (scrubbed.match(/#EXT-X-TWITCH-PREFETCH:/g) || []).length - (res.match(/#EXT-X-TWITCH-PREFETCH:/g) || []).length;
+    const announced = (text.match(/#EXT-X-TWITCH-PREFETCH:/g) || []).length - (scrubbed.match(/#EXT-X-TWITCH-PREFETCH:/g) || []).length;
+    if (dropped + announced > 0 && withheld < 20) {
+      withheld++;
+      slog(`prefetch trattenute: ${dropped + announced} (${announced > 0 ? 'pausa annunciata' : 'forma diversa da quelle live'})`);
+    }
+    return res;
+  };
+  const session = createSession({ make, log: slog, describe, onStopped: () => flush(' (sessione senza playlist)') });
   return {
     process(text, ctx) {
       const r = session.process(text, ctx);
@@ -67,8 +83,7 @@ if (typeof g.fetch === 'function') {
   // presa PRIMA di installare il gancio: e' la rete del controller (vedi io.ts)
   const rawFetch = g.fetch.bind(self);
   const io = createExtIO(rawFetch, 8000);
-  const sources = extSources(rawFetch, log);
-  const router: PlaylistRouter = new PlaylistRouter((login) => makeProcessor(login, io, sources, () => router.describe()));
+  const router: PlaylistRouter = new PlaylistRouter((login, id) => makeProcessor(login, id, io, (l) => extSources(rawFetch, l), () => router.describe()));
   const hooked = createFetchHook({ fetch: rawFetch, router, log });
   // l'etichetta sulla funzione (non sul global) permette all'osservatore del check di collegare le sue righe a quelle del gancio
   (hooked as unknown as { twizenTag: string }).twizenTag = TAG;

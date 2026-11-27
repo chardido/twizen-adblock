@@ -43,6 +43,8 @@ export interface AdControllerOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string) => void;
+  /** Opt-in: una EXT-X-DISCONTINUITY al passaggio tra la playlist originale e la sorgente pulita (vedi Timeline). Default: spento. */
+  markSourceSwitch?: boolean;
 }
 
 interface AltEntry {
@@ -61,7 +63,7 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
 
 export class AdController {
   private variants: { [url: string]: MasterVariant } = {};
-  private timeline = new Timeline(AD_TUNING.memorySegments);
+  private timeline: Timeline;
   private engaged = false;
   private alt: AltEntry | null = null;
   private badShapes: { [id: string]: number } = {};
@@ -83,6 +85,7 @@ export class AdController {
   active = false;
 
   constructor(private o: AdControllerOptions) {
+    this.timeline = new Timeline(AD_TUNING.memorySegments, { markSourceSwitch: !!o.markSourceSwitch });
     this.now = o.now || (() => Date.now());
     this.sleep = o.sleep || defaultSleep;
     this.log = o.log || ((m) => console.log('[ads] ' + m));
@@ -171,7 +174,7 @@ export class AdController {
       return this.getAlt(this.variantFor(ctx.url), info.roll || this.info.roll).then((alt) => {
         if (this.destroyed) return text;
         if (alt) {
-          const r = this.timeline.emit(alt.parsed, alt.parsed.entries.filter((e) => !e.prefetch), alt.url);
+          const r = this.timeline.emit(alt.parsed, alt.parsed.entries.filter((e) => !e.prefetch), alt.url, 'clean');
           if (r) {
             this.setMode(info.active ? 'alt' : 'idle');
             this.lastOut[ctx.url] = r.text;
@@ -187,7 +190,7 @@ export class AdController {
   }
 
   private emitPrimary(parsed: ParsedMedia, content: Entry[], ctx: PlaylistContext, original: string): string {
-    const r = this.timeline.emit(parsed, content, ctx.url);
+    const r = this.timeline.emit(parsed, content, ctx.url, 'main');
     if (!r) return original;
     this.lastOut[ctx.url] = r.text;
     return r.text;
@@ -207,7 +210,7 @@ export class AdController {
     const frozen = this.lastOut[ctx.url];
     if (frozen) return frozen;
     // mai consegnato nulla per questo livello: il contenuto reale precedente al break (se c'e') e' tutto cio' che si puo' dare
-    const r = content.length ? this.timeline.emit(parsed, content, ctx.url) : null;
+    const r = content.length ? this.timeline.emit(parsed, content, ctx.url, 'main') : null;
     if (r) {
       this.lastOut[ctx.url] = r.text;
       this.timeline.markGap();

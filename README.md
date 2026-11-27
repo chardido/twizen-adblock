@@ -7,8 +7,6 @@ Keeps twitch.tv on the live stream during ad breaks. A small browser extension f
 [![Latest release](https://img.shields.io/github/v/release/chardido/twizen-adblock?sort=semver)](https://github.com/chardido/twizen-adblock/releases/latest)
 [![Licence: MIT](https://img.shields.io/github/license/chardido/twizen-adblock)](LICENSE)
 
-<!-- Support button: add it on the line below this comment (one line, it will sit under the badges). -->
-
 </div>
 
 It does one thing: when twitch.tv inserts an ad break, the player is handed the same live stream without the break. There is no popup, no options page and no interface.
@@ -21,7 +19,7 @@ Download the file for your browser from the [latest release](https://github.com/
 |---|---|---|
 | Version | 111 or newer | 128 or newer |
 | File to download | `twizen-adblock-chrome-v<version>.zip` | `twizen-adblock-firefox-v<version>.xpi` if the release has one, otherwise `twizen-adblock-firefox-v<version>.zip` |
-| Stays installed after a restart | Yes, until you remove it | `.xpi`: intended to (not tested yet). `.zip`: no, it is removed when Firefox restarts |
+| Stays installed after a restart | Yes, until you remove it | `.xpi`: it is a normally signed add-on, so it should (installing one and restarting has not been confirmed yet). `.zip`: no, it is removed when Firefox restarts |
 | Updates | Manual: replace the folder with a newer release | Manual: install the newer file |
 
 ### Chrome
@@ -35,7 +33,7 @@ To update, download the new release, replace the contents of the folder, then pr
 
 ### Firefox
 
-A release may include a `.xpi` signed by Mozilla. The release workflow attaches it when signing succeeds, so check the assets of the release: not every release has one, and this signing path has not been exercised yet.
+Releases from 0.1.2 on include a `.xpi` signed by Mozilla, attached by the release workflow when signing succeeds. Earlier releases (0.1.0, 0.1.1) have none, so check the assets of the release you download. The signing step has run successfully; installing the signed file in Firefox and keeping it across a restart has not been confirmed yet.
 
 **With a signed `.xpi`**
 
@@ -85,7 +83,8 @@ The `pausa pubblicitaria:` line is a single total written when the break ends. C
 ## Known limits
 
 - Pre-rolls were checked on real channels in both Chrome and Firefox. Real mid-rolls have been seen handled in both browsers, but only a few times.
-- In Firefox, one real mid-roll showed 1 to 2 seconds of the ad video at the start of the break before the live stream came back. A likely cause is described under How it works; that link was not confirmed in a browser, and it is not fixed.
+- In Firefox, one real mid-roll (0.1.1) showed 1 to 2 seconds of the ad video at the start of the break before the live stream came back. From 0.1.3 the extension withholds the prefetch entries that point at the start of an announced break, and prefetch entries whose URL has a different shape from the live ones (see How it works). That second rule is a heuristic based on a handful of captured breaks; whether it removes the flash in practice has not been confirmed.
+- In Firefox, one report of the video staying on "loading" after a break could not be reproduced. During real mid-rolls twitch.tv was seen opening a second playback session for the same channel; the extension keeps both.
 - Only live streams are handled. Ads in VODs and replays are not, including the recording Twitch autoplays when a channel goes offline.
 - Embedded players on other sites have not been tested.
 - It conflicts with other scripts or extensions that also wrap `Worker` on twitch.tv.
@@ -96,7 +95,9 @@ The `pausa pubblicitaria:` line is a single total written when the break ends. C
 
 The extension runs a script in the page at document start. twitch.tv plays video with the Amazon IVS player, which downloads its playlists from a Web Worker. The script wraps `window.Worker` and, for the IVS player worker only, puts a small hook in front of the original worker code. The hook wraps `fetch` inside the worker and inspects the HLS playlists. When a playlist contains a stitched ad break, it requests the same live stream again in a form Twitch serves without the break (anonymous, no cookies, no account) and hands the player that playlist instead, renumbered so the player sees a continuous stream. Playlists without ads are passed through untouched.
 
-The low-latency playlists Twitch serves also list the next segments to fetch (`#EXT-X-TWITCH-PREFETCH`). Around the start of some breaks, those lines already point at the first ad segments, before any playlist shows the break. The extension has no earlier signal to act on, so a player that fetches those segments can briefly show the ad. Removing the prefetch lines would avoid it but would also give up the low-latency fetching for every playlist, so it is not done.
+The low-latency playlists Twitch serves also list the next segments to fetch (`#EXT-X-TWITCH-PREFETCH`). Around the start of some breaks, those lines already point at the first ad segments before any playlist shows the break. The extension withholds a prefetch line in two cases: when an ad break is already announced in the playlist and the line falls at or after the announced start, and when the line's URL has a different shape from the prefetch lines it has seen turn into live segments (ad segment URLs were observed to have a shorter token). A wrongly withheld line only costs low-latency fetching for that poll.
+
+When playback switches between the clean source and the original playlist, the extension marks a discontinuity at the boundary, because the two are different renditions.
 
 ## Build from source
 
