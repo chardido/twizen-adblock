@@ -45,7 +45,7 @@ jobs:
           cat > notes.md <<'NOTES'
           Chrome: unzip the Chrome archive, keep the folder, then open `chrome://extensions`, enable Developer mode and use "Load unpacked". There are no automatic updates.
 
-          Firefox: the Firefox archive is unsigned, so it can only be loaded as a temporary add-on (`about:debugging#/runtime/this-firefox`, "Load Temporary Add-on"). It is removed when Firefox restarts.
+          Firefox: if a `.xpi` file is listed among the assets, it was signed by Mozilla (a separate job adds it after this release is published): open it in Firefox, or drag it onto a Firefox window, to install it. If there is no `.xpi`, use the Firefox zip, which is unsigned and can only be loaded as a temporary add-on (`about:debugging#/runtime/this-firefox`, "Load Temporary Add-on"); it is removed when Firefox restarts.
 
           See the README for details and known limits.
           NOTES
@@ -54,3 +54,84 @@ jobs:
             "twizen-adblock-firefox-v${VERSION}.zip" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file notes.md
+
+  # Firma Mozilla (canale unlisted, auto-distribuzione). Job separato: se fallisce, zip e Release restano pubblicati.
+  sign-firefox:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Check the signing configuration
+        id: cfg
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$AMO_JWT_ISSUER" ] || [ -z "$AMO_JWT_SECRET" ]; then
+            echo "::notice::AMO_JWT_ISSUER / AMO_JWT_SECRET are not configured: skipping the Mozilla signing (forks, or secrets not set)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' | grep -q '\.xpi$'; then
+            echo "::notice::The release already has a signed .xpi: nothing to do (Mozilla signs a version number only once)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Take the released Firefox build
+        if: steps.cfg.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # si firma lo stesso contenuto dello zip pubblicato (web-ext sign ricrea l'archivio da una cartella: i byte dello zip cambiano, i file no)
+          gh release download "${GITHUB_REF_NAME}" --pattern 'twizen-adblock-firefox-v*.zip' --dir released
+          mkdir firefox-build
+          unzip -q released/twizen-adblock-firefox-v*.zip -d firefox-build
+          # Mozilla richiede il sorgente del codice generato dal build: archivio del tag (README con le istruzioni, lockfile incluso)
+          git archive --format=zip --output=source.zip HEAD
+
+      - name: Sign with Mozilla
+        if: steps.cfg.outputs.run == 'true'
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          # --approval-timeout: attesa della revisione automatica (ms). Se scade il job fallisce, ma la versione resta registrata
+          # presso Mozilla: il .xpi firmato si scarica dal Developer Hub e si aggiunge alla Release con `gh release upload`.
+          npx --yes web-ext@10.8.0 sign \
+            --source-dir firefox-build \
+            --channel unlisted \
+            --artifacts-dir signed \
+            --upload-source-code source.zip \
+            --approval-timeout 2400000
+          test "$(find signed -name '*.xpi' | wc -l)" -eq 1
+
+      - name: Check that the signed file contains the released files
+        if: steps.cfg.outputs.run == 'true'
+        run: |
+          xpi="$(find signed -name '*.xpi')"
+          mkdir signed-x
+          unzip -q "$xpi" -d signed-x
+          # il manifest firmato puo' differire solo per le firme (META-INF): script e icona devono essere identici
+          for f in twizen-adblock.js icon.png; do
+            cmp "firefox-build/$f" "signed-x/$f"
+          done
+
+      - name: Attach the signed file to the release
+        if: steps.cfg.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp "$(find signed -name '*.xpi')" "twizen-adblock-firefox-v${version}.xpi"
+          gh release upload "${GITHUB_REF_NAME}" "twizen-adblock-firefox-v${version}.xpi"
